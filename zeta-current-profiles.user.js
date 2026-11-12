@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         제타 현재 채팅 프로필 자동 감지
+// @name         제타 프로필 자동 감지
 // @namespace    zeta-current-profiles
 // @version      1.0.0
 // @description  채팅방의 현재 캐릭터/유저 대화 프로필을 수집해 프로필 카드로 표시합니다.
