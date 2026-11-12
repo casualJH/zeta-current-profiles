@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 현재 채팅 프로필 자동 감지
 // @namespace    zeta-current-profiles
-// @version      0.10.6
+// @version      0.10.7
 // @description  채팅방의 현재 캐릭터/유저 대화 프로필을 수집해 프로필 카드로 표시합니다.
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -478,7 +478,7 @@
       #zcp-panel .zcp-grip{position:absolute;right:0;bottom:0;width:30px;height:30px;cursor:nwse-resize;touch-action:none;padding:0;background:transparent;border:0;border-radius:0}
       #zcp-panel .zcp-grip::after{content:'';position:absolute;right:3px;bottom:3px;width:13px;height:13px;background:#eee;clip-path:polygon(100% 0,100% 100%,0 100%);pointer-events:none}
       #zcp-panel .zcp-grip:focus-visible{outline:2px solid #eee;outline-offset:-3px}
-      #zcp-panel .zcp-expand-all{display:block;flex:none;align-self:stretch;width:auto;min-width:0;box-sizing:border-box;margin:10px 12px 0;background:#202124;border-color:#38393d}
+      #zcp-panel .zcp-expand-all{display:block;flex:none;align-self:stretch;width:auto;min-width:0;box-sizing:border-box;margin:12px;background:#202124;border-color:#38393d}
       #zcp-panel .zcp-actions{display:flex;gap:6px;flex-wrap:wrap}
     `;
     document.head.appendChild(style);
