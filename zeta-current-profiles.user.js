@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         제타 현재 채팅 프로필 자동 감지
 // @namespace    zeta-current-profiles
-// @version      0.10.5
+// @version      0.10.6
 // @description  채팅방의 현재 캐릭터/유저 대화 프로필을 수집해 프로필 카드로 표시합니다.
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
@@ -478,7 +478,7 @@
       #zcp-panel .zcp-grip{position:absolute;right:0;bottom:0;width:30px;height:30px;cursor:nwse-resize;touch-action:none;padding:0;background:transparent;border:0;border-radius:0}
       #zcp-panel .zcp-grip::after{content:'';position:absolute;right:3px;bottom:3px;width:13px;height:13px;background:#eee;clip-path:polygon(100% 0,100% 100%,0 100%);pointer-events:none}
       #zcp-panel .zcp-grip:focus-visible{outline:2px solid #eee;outline-offset:-3px}
-      #zcp-panel .zcp-expand-all{display:block;margin:12px 0 0 auto}
+      #zcp-panel .zcp-expand-all{display:block;flex:none;align-self:stretch;width:auto;min-width:0;box-sizing:border-box;margin:10px 12px 0;background:#202124;border-color:#38393d}
       #zcp-panel .zcp-actions{display:flex;gap:6px;flex-wrap:wrap}
     `;
     document.head.appendChild(style);
@@ -506,15 +506,40 @@
     top.classList.add('zcp-titlebar');
     const scroll = document.createElement('div');
     scroll.className = 'zcp-scroll';
-    scroll.append(expandAll, output);
+    scroll.append(output);
     const grip = document.createElement('button');
     grip.type = 'button';
     grip.className = 'zcp-grip';
     grip.setAttribute('aria-label', '창 크기 조절');
-    panel.append(top, scroll, grip);
+    panel.append(top, expandAll, scroll, grip);
     if (typeof ResizeObserver === 'function') {
       new ResizeObserver(() => { if (!panel.hidden) updatePreviews(); }).observe(scroll);
     }
+    const geometryKey = 'zeta-current-profiles:window';
+    let savedGeometry;
+    try { savedGeometry = JSON.parse(localStorage.getItem(geometryKey)); } catch (_) {}
+
+    function saveGeometry() {
+      const {left, top, width, height} = panel.getBoundingClientRect();
+      if (!width || !height) return;
+      savedGeometry = {left, top, width, height};
+      try { localStorage.setItem(geometryKey, JSON.stringify(savedGeometry)); } catch (_) {}
+    }
+
+    function restoreGeometry() {
+      if (!savedGeometry) return;
+      const {left, top, width, height} = savedGeometry;
+      if (![left, top, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return;
+      const fittedWidth = Math.min(innerWidth - 16, Math.max(220, width));
+      const fittedHeight = Math.min(innerHeight - 16, Math.max(180, height));
+      panel.style.right = panel.style.bottom = 'auto';
+      panel.style.maxHeight = 'none';
+      panel.style.width = fittedWidth + 'px';
+      panel.style.height = fittedHeight + 'px';
+      panel.style.left = Math.max(8, Math.min(innerWidth - fittedWidth - 8, left)) + 'px';
+      panel.style.top = Math.max(8, Math.min(innerHeight - fittedHeight - 8, top)) + 'px';
+    }
+
     function resize(bounds, width, height) {
       panel.style.right = panel.style.bottom = 'auto';
       panel.style.left = bounds.left + 'px';
@@ -531,7 +556,7 @@
       const move = pointer => resize(bounds, bounds.width + pointer.clientX - event.clientX,
         bounds.height + pointer.clientY - event.clientY);
       grip.addEventListener('pointermove', move);
-      grip.addEventListener('lostpointercapture', () => grip.removeEventListener('pointermove', move), {once:true});
+      grip.addEventListener('lostpointercapture', () => { grip.removeEventListener('pointermove', move); saveGeometry(); }, {once:true});
     });
     grip.addEventListener('keydown', event => {
       const offsets = {ArrowLeft:[-16,0], ArrowRight:[16,0], ArrowUp:[0,-16], ArrowDown:[0,16]};
@@ -540,6 +565,7 @@
       event.preventDefault();
       const bounds = panel.getBoundingClientRect();
       resize(bounds, bounds.width + offset[0], bounds.height + offset[1]);
+      saveGeometry();
     });
     top.addEventListener('pointerdown', event => {
       if (event.button !== 0 || event.target.closest('button')) return;
@@ -554,12 +580,10 @@
         panel.style.top = Math.max(0, Math.min(innerHeight - bounds.height, pointer.clientY - y)) + 'px';
       }
       top.addEventListener('pointermove', move);
-      top.addEventListener('lostpointercapture', () => top.removeEventListener('pointermove', move), {once:true});
+      top.addEventListener('lostpointercapture', () => { top.removeEventListener('pointermove', move); saveGeometry(); }, {once:true});
     });
-    window.addEventListener('resize', () => {
-      panel.style.left = panel.style.top = panel.style.right = panel.style.bottom = '';
-      panel.style.width = panel.style.height = panel.style.maxHeight = '';
-    });
+    window.addEventListener('resize', restoreGeometry);
+    restoreGeometry();
     document.body.append(launch,panel);
     launch.addEventListener('click',()=>{panel.hidden=!panel.hidden;render();});
     render();
