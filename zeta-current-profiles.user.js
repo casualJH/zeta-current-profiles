@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         제타 현재 채팅 프로필 자동 감지 (테스트)
+// @name         제타 현재 채팅 프로필 자동 감지
 // @namespace    zeta-current-profiles
-// @version      0.10.4
-// @description  채팅방의 현재 캐릭터/유저 대화 프로필을 API 응답에서 감지하고 진단 결과를 표시합니다.
+// @version      0.10.5
+// @description  채팅방의 현재 캐릭터/유저 대화 프로필을 수집해 프로필 카드로 표시합니다.
 // @match        https://zeta-ai.io/*
 // @match        https://*.zeta-ai.io/*
 // @run-at       document-start
@@ -19,27 +19,22 @@
   const UUID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
   const MAX_TEXT = 20000;
   const MAX_JSON_BYTES = 900000;
-  const state = {roomId: null, character: null, chatProfile: null, user: null, personaStatus: '미확인', personaDiagnostics: [], requestDiagnostics: [], events: [], observed: 0, diagnostics: [], lastUrl: location.pathname + location.search};
+  const state = {roomId: null, character: null, chatProfile: null, user: null, personaStatus: '미확인', lastUrl: location.pathname + location.search};
   // Add a path here only after verifying the field against a real response.
   const confirmedFields = [['description']];
   const detailSources = new Map();
   const screenProfiles = new Map();
   const plotIntroductions = new Map();
   let roomCharacters = [];
-  let panel, output, countLabel;
+  let panel, output;
   let roomGeneration = 0;
   let refreshPending = false;
 
-  function log(message) {
-    state.events.unshift(new Date().toLocaleTimeString('ko-KR') + ' ' + message);
-    state.events.length = Math.min(state.events.length, 30);
-    renderSoon();
-  }
   function roomFromText(text) {
     const match = /\/rooms\/([0-9a-f-]{36})(?:[/?#]|$)/i.exec(String(text || ''));
     return match && UUID.test(match[1]) ? match[1] : null;
   }
-  function onRoom(id, source) {
+  function onRoom(id) {
     if (!id || id === state.roomId) return;
     roomGeneration++;
     state.roomId = id;
@@ -48,23 +43,18 @@
     roomCharacters = [];
     screenProfiles.clear();
     plotIntroductions.clear();
-    state.screenMatches = 0;
     state.character = null;
     state.chatProfile = null;
     state.user = null;
     state.personaStatus = '미확인';
-    state.observed = 0;
-    state.diagnostics = [];
-    state.personaDiagnostics = [];
-    state.requestDiagnostics = [];
-    log('채팅방 감지 (' + source + ')');
+    renderSoon();
   }
   function checkRoute() {
     const url = location.pathname + location.search;
     if (url !== state.lastUrl) {
       state.lastUrl = url;
       const id = roomFromText(url);
-      if (id) onRoom(id, '주소');
+      if (id) onRoom(id);
       else if (state.roomId) {
         roomGeneration++;
         state.roomId = null;
@@ -77,11 +67,11 @@
         state.chatProfile = null;
         state.user = null;
         state.personaStatus = '미확인';
-        log('주소 변경: 현재 채팅방을 다시 확인하는 중');
+        renderSoon();
       }
     }
     const id = roomFromText(url);
-    if (id) onRoom(id, '주소');
+    if (id) onRoom(id);
   }
   function endpoint(raw) {
     try {
@@ -108,54 +98,6 @@
     if (!name && !desc && !avatar) return null;
     return {id: id == null ? null : String(id).slice(0, 120), name: plain(name, 160), description: desc, image: plain(avatar, 1200)};
   }
-  function valueShape(v) {
-    if (v === null) return 'null';
-    if (Array.isArray(v)) return 'array(' + v.length + ')';
-    if (typeof v === 'string') return 'string(' + v.length + (v.trim() ? ',nonempty' : ',empty') + ')';
-    if (typeof v === 'object') return 'object(' + Object.keys(v).length + ')';
-    return typeof v;
-  }
-  function inspectShape(path, payload, label, method = 'unknown', status = null) {
-    const o = {method, status, endpoint: path.replace(/\/rooms\/[0-9a-f-]{36}/ig, '/rooms/{roomId}').replace(/\/plots\/[0-9a-f-]{36}/ig, '/plots/{plotId}'), label,
-      rootShape: valueShape(payload), fields: {}};
-    if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
-      for (const k of Object.keys(payload).slice(0, 28)) {
-        if (/auth|token|cookie|password|secret|email|phone/i.test(k)) continue;
-        o.fields[k] = valueShape(payload[k]);
-        if (k === 'plot' && payload[k] && typeof payload[k] === 'object' && !Array.isArray(payload[k]))
-          o.plotFields = Object.fromEntries(Object.entries(payload[k]).slice(0, 25).filter(([key]) => !/auth|token|cookie|password|secret/i.test(key)).map(([key, value]) => [key, valueShape(value)]));
-      }
-    }
-    // Log array item *shapes* rather than raw values. A plot can contain multiple
-    // characters/chat profiles and those must not be treated as a selected user persona.
-    if (payload?.plot && typeof payload.plot === 'object') {
-      for (const k of ['characters', 'chatProfiles']) {
-        const list = payload.plot[k];
-        if (!Array.isArray(list)) continue;
-        o[k + 'Items'] = list.slice(0, 3).map(entry =>
-          entry && typeof entry === 'object' && !Array.isArray(entry)
-            ? Object.fromEntries(Object.entries(entry).slice(0, 32)
-                .filter(([field]) => !/auth|token|cookie|password|secret|email|phone/i.test(field))
-                .map(([field,val]) => [field, valueShape(val)]))
-            : {value:valueShape(entry)});
-      }
-    }
-    if (path.toLowerCase().includes('/user-personas/select')) {
-      o.personaFields = Object.fromEntries(['name','profileImageUrl','description','id'].map(k =>
-        [k, Object.prototype.hasOwnProperty.call(payload,k) ? valueShape(payload[k]) : 'absent']));
-      o.personaRootKeys = Object.keys(payload).filter(k => !/auth|token|cookie|password|secret|email|phone/i.test(k)).slice(0,25);
-    }
-    o.paths = [];
-    visit(payload, (value, field) => {
-      if (o.paths.length < 250) {
-        o.paths.push({field: field.replace(new RegExp(UUID.source.slice(1, -1), 'gi'), '{id}'),
-          shape: valueShape(value)});
-      }
-    });
-    state.diagnostics.unshift(o);
-    state.diagnostics.length = Math.min(state.diagnostics.length, 20);
-    log('응답 구조 기록: ' + label);
-  }
   function visit(root, callback) {
     const stack = [{ value: root, path: '$', depth: 0 }];
     for (let count = 0; stack.length && count < 1500; count++) {
@@ -179,7 +121,7 @@
     // 같은 방에서 응답에 새 프로필이 나타나면 갱신
     if (previous && JSON.stringify(previous.data) === JSON.stringify(match.profile)) return;
     state[type] = {data:match.profile, origin:path, field:match.path, at:new Date().toISOString()};
-    log((type === 'character' ? '캐릭터' : type === 'chatProfile' ? 'plot.chatProfiles' : '유저 대화') + ' 프로필 후보 확인');
+    renderSoon();
     window.dispatchEvent(new CustomEvent('zeta-current-profiles-updated', {detail:publicState()}));
   }
   function publicState() {
@@ -188,41 +130,30 @@
   // 웹페이지에서 다른 유저스크립트가 사용할 수 있는 읽기 전용 스냅샷 API
   Object.defineProperty(window, 'zetaCurrentProfiles', {configurable:false, enumerable:false, value:Object.freeze({get:publicState})});
 
-  function observe(path, payload, method = 'unknown', status = null) {
+  function observe(path, payload, status) {
     const isPersonaSelect = /^\/v1\/plots\/[^/]+\/rooms\/[^/]+\/user-personas\/(select|selected)\/?$/i.test(path);
-    if (isPersonaSelect) requestNote(path, method, status, '선택 API observe 진입: '+valueShape(payload));
     if (isPersonaSelect && payload === null && status === 200 && roomFromText(path) === state.roomId) {
       state.user = null;
       state.personaStatus = '선택된 프로필 없음';
       renderSoon();
     }
-    if (!state.roomId || !path || !payload || typeof payload !== 'object' || Array.isArray(payload)) { if (isPersonaSelect) requestNote(path,method,status,'선택 API 본문이 객체 아님'); return; }
+    if (!state.roomId || !path || !payload || typeof payload !== 'object' || Array.isArray(payload)) return;
     const requestRoom = roomFromText(path);
     const isMessage = /\/messages(?:\/|$)/i.test(path);
     const isRoomDetail = !!requestRoom && !isMessage;
     const isRelated = isRoomDetail || /(?:profile|persona|character|bot|agent|\/plots\/)/i.test(path);
-    if (!isRelated) { if (isPersonaSelect) requestNote(path,method,status,'관련 API 필터 실패'); return; }
-    state.observed++;
-    if (isRoomDetail && !state.roomId) onRoom(requestRoom, 'API 요청');
+    if (!isRelated) return;
+    if (isRoomDetail && !state.roomId) onRoom(requestRoom);
     // 다른 방에서 로드된 응답으로 현재 프로필을 덮어쓰지 않음
-    if (requestRoom && state.roomId && requestRoom !== state.roomId) { if (isPersonaSelect) requestNote(path,method,status,'현재 방 ID 불일치'); return; }
+    if (requestRoom && requestRoom !== state.roomId) return;
     // This endpoint is room-scoped, even though it also contains a plot ID.
-    // Diagnose the observed response BEFORE generic room handling.
     if (isPersonaSelect) {
-      log('유저 선택 API 분기 진입: '+method+' '+status);
-      const fields = Object.fromEntries(['id','name','profileImageUrl','description'].map(k =>
-        [k, Object.prototype.hasOwnProperty.call(payload,k) ? valueShape(payload[k]) : 'absent']));
-      const info = {method,status,endpoint:'/v1/plots/{plotId}/rooms/{roomId}/user-personas/select',fields};
-      state.personaDiagnostics.unshift(info);
-      state.personaDiagnostics.length = Math.min(state.personaDiagnostics.length, 10);
-      inspectShape(path,payload,'유저 대화 프로필 선택 응답',method,status);
       const persona = profileObject(payload);
       if (persona) {
         state.personaStatus='선택 API에서 프로필 데이터 감지';
         accept('user',{profile:persona,path:'$'},path);
       } else {
         state.personaStatus='선택 API에서 표시 가능한 프로필 데이터 없음';
-        log('유저 선택 API 응답: '+Object.entries(fields).map(([k,v])=>k+'='+v).join(', '));
       }
       return;
     }
@@ -248,15 +179,14 @@
       state.plotId = typeof payload.plot.id === 'string' ? payload.plot.id : null;
       const chars = payload.plot.characters;
       roomCharacters = Array.isArray(chars) ? chars.map(profileObject).filter(Boolean) : [];
+      renderSoon();
       if (Array.isArray(chars) && chars.length === 1) {
         const candidate = profileObject(chars[0]);
         if (state.character && state.character.data.id !== candidate?.id) detailSources.clear();
         if (candidate) accept('character', {profile:candidate, path:'$.plot.characters[0]'}, path);
-        else log('plot.characters[0]에서 표시 가능한 캐릭터 필드 미확인');
       } else if (Array.isArray(chars)) {
         state.character = null;
         detailSources.clear();
-        log('캐릭터가 ' + chars.length + '개: 현재 발화 캐릭터는 임의 선택하지 않음');
       }
       const profiles = payload.plot.chatProfiles;
       if (Array.isArray(profiles) && profiles.length === 1) {
@@ -265,7 +195,6 @@
       }
     }
     if (!/\/(messages|events|recommended-messages|settings|model-setting)(?:\/|$)/i.test(path)) {
-      inspectShape(path, payload, '프로필 관련 응답', method, status);
       collectDetails(path, payload);
     }
   }
@@ -329,7 +258,6 @@
         candidates.push({body, name, known: section.matches(descriptionSelector)});
       }
     }
-    state.screenMatches = candidates.length;
     if (candidates.length !== 1) return;
     const {body, known, name} = candidates[0];
     const text = body.innerText;
@@ -356,25 +284,18 @@
     applyDetails(character);
   }
 
-  function requestNote(path, method, status, reason) {
-    if (!path || !(/\/rooms\//.test(path) || /profile|persona|character/i.test(path))) return;
-    const clean=path.replace(/\/rooms\/[0-9a-f-]{36}/ig,'/rooms/{roomId}').replace(/\/plots\/[0-9a-f-]{36}/ig,'/plots/{plotId}');
-    state.requestDiagnostics.unshift({method,endpoint:clean,status,reason});
-    state.requestDiagnostics.length=Math.min(20,state.requestDiagnostics.length);
-  }
-  function inspectResponse(resp, path, room, method = 'GET') {
+  function inspectResponse(resp, path, room) {
     if (!path || !resp) return;
-    if (!resp.ok) {requestNote(path,method,resp.status,'HTTP 오류');return;}
+    if (!resp.ok) return;
     const length = Number(resp.headers.get('content-length'));
-    if (length && length > MAX_JSON_BYTES) {requestNote(path,method,resp.status,'응답 크기 초과');return;}
+    if (length && length > MAX_JSON_BYTES) return;
     const contentType = resp.headers.get('content-type') || '';
-    if (!/json/i.test(contentType) && !path.toLowerCase().includes('/user-personas/select')) {requestNote(path,method,resp.status,'JSON 콘텐츠 아님');return;}
+    if (!/json/i.test(contentType) && !path.toLowerCase().includes('/user-personas/select')) return;
     resp.clone().text().then(text => {
-      if (text.length > MAX_JSON_BYTES) {requestNote(path,method,resp.status,'응답 텍스트 크기 초과');return;}
+      if (text.length > MAX_JSON_BYTES) return;
       if (room !== roomGeneration) return;
-      try {observe(path,JSON.parse(text),method,resp.status);requestNote(path,method,resp.status,'분석 완료');}
-      catch (e) {requestNote(path,method,resp.status,'JSON 파싱/분석 오류: '+String(e?.message||e).slice(0,100));}
-    }).catch(e => requestNote(path,method,resp.status,'응답 읽기 실패: '+String(e?.message||e).slice(0,100)));
+      observe(path, JSON.parse(text), resp.status);
+    }).catch(() => {});
   }
   const nativeFetch = window.fetch;
   window.fetch = function (input, init) {
@@ -382,14 +303,12 @@
     const path = endpoint(rawUrl(input));
     if (path) {
       const id = roomFromText(path);
-      if (id && !state.roomId) onRoom(id, 'API 요청');
+      if (id && !state.roomId) onRoom(id);
     }
-    const method = String(init?.method || (input && input.method) || 'GET').toUpperCase();
     const room = roomGeneration;
     const response = nativeFetch.apply(this, arguments);
     if (path && (/\/rooms\//.test(path) || /profile|persona|character|bot|agent|\/plots\//i.test(path))) {
-      if (path.toLowerCase().includes('/user-personas/select')) requestNote(path, method, null, 'fetch 선택 API 요청 감지');
-      Promise.resolve(response).then(r => inspectResponse(r, path, room, method)).catch(() => {});
+      Promise.resolve(response).then(r => inspectResponse(r, path, room)).catch(() => {});
     }
     return response;
   };
@@ -398,62 +317,33 @@
   const xhrInfo = new WeakMap();
   XMLHttpRequest.prototype.open = function (method, url) {
     const path = endpoint(url);
-    xhrInfo.set(this, {path, method:String(method || 'GET').toUpperCase()});
-    if (path && !state.roomId) onRoom(roomFromText(path), 'API 요청');
+    xhrInfo.set(this, path);
+    if (path && !state.roomId) onRoom(roomFromText(path));
     return nativeOpen.apply(this, arguments);
   };
   XMLHttpRequest.prototype.send = function () {
     checkRoute();
     const room = roomGeneration;
-    const entry = xhrInfo.get(this);
-    const path = entry?.path;
+    const path = xhrInfo.get(this);
     if (path && (/\/rooms\//.test(path) || /profile|persona|character|bot|agent|\/plots\//i.test(path))) {
       this.addEventListener('load', function () {
         if (room !== roomGeneration) return;
-        const isSelect = path.toLowerCase().includes('/user-personas/select');
         try {
-          if (isSelect) requestNote(path,entry.method,this.status,'XHR 응답 수신 / responseType='+this.responseType);
-          if (this.status < 200 || this.status >= 300) {requestNote(path,entry.method,this.status,'HTTP 오류');return;}
+          if (this.status < 200 || this.status >= 300) return;
           let payload;
           if (this.responseType === 'json') payload = this.response;
           else if (this.responseType === '' || this.responseType === 'text') {
             const text = this.responseText;
-            if (typeof text !== 'string' || text.length > MAX_JSON_BYTES) {requestNote(path,entry.method,this.status,'XHR 응답 크기/형식 제한');return;}
+            if (typeof text !== 'string' || text.length > MAX_JSON_BYTES) return;
             payload = JSON.parse(text);
-          } else {requestNote(path,entry.method,this.status,'지원되지 않는 XHR responseType');return;}
-          observe(path, payload, entry.method, this.status);
-          if (isSelect) requestNote(path,entry.method,this.status,'XHR 분석 완료');
-        } catch (e) {requestNote(path,entry.method,this.status,'XHR 분석 예외: '+String(e?.message||e).slice(0,100));}
+          } else return;
+          observe(path, payload, this.status);
+        } catch (_) {}
       }, {once:true});
     }
     return nativeSend.apply(this, arguments);
   };
 
-  function report() {
-    const snapshot = publicState();
-    return {
-      script:'zeta-current-profiles',version:'0.10.4',page:location.pathname,
-      roomId:snapshot.roomId,
-      character:state.character,
-      characters:listedCharacters(),
-      user:state.user,
-      chatProfile:state.chatProfile,
-      personaStatus:state.personaStatus,
-      personaDiagnostics:state.personaDiagnostics,
-      requestDiagnostics:state.requestDiagnostics,
-      observedRelatedResponses:state.observed,
-      recentEvents:state.events.slice(0, 15),
-      responseShapes:state.diagnostics
-    };
-  }
-  function diagnosticReport() {
-    return {script:'zeta-current-profiles', version:'0.10.4',
-      roomDetected:!!state.roomId, characterDetected:!!state.character, userDetected:!!state.user,
-      visibleCharacterBodyMatches:state.screenMatches || 0,
-      characterDescriptionStatus:state.character && state.character.descriptionStatus,
-      personaDiagnostics:state.personaDiagnostics, requestDiagnostics:state.requestDiagnostics,
-      responseShapes:state.diagnostics};
-  }
   function renderSoon() {
     if (refreshPending) return;
     refreshPending = true;
@@ -588,6 +478,7 @@
       #zcp-panel .zcp-grip{position:absolute;right:0;bottom:0;width:30px;height:30px;cursor:nwse-resize;touch-action:none;padding:0;background:transparent;border:0;border-radius:0}
       #zcp-panel .zcp-grip::after{content:'';position:absolute;right:3px;bottom:3px;width:13px;height:13px;background:#eee;clip-path:polygon(100% 0,100% 100%,0 100%);pointer-events:none}
       #zcp-panel .zcp-grip:focus-visible{outline:2px solid #eee;outline-offset:-3px}
+      #zcp-panel .zcp-expand-all{display:block;margin:12px 0 0 auto}
       #zcp-panel .zcp-actions{display:flex;gap:6px;flex-wrap:wrap}
     `;
     document.head.appendChild(style);
@@ -599,37 +490,6 @@
     const top=document.createElement('div');top.className='zcp-actions';top.style.justifyContent='space-between';top.append(title,close);
     renderedProfiles = '';
     output=document.createElement('div');output.id='zcp-output';
-    const actions=document.createElement('div');actions.className='zcp-actions';
-    const copy=document.createElement('button');copy.textContent='진단 JSON 복사';copy.addEventListener('click',async()=>{
-      const data=JSON.stringify(diagnosticReport(),null,2);
-      try {await navigator.clipboard.writeText(data);copy.textContent='복사됨';setTimeout(()=>copy.textContent='진단 JSON 복사',1500);}
-      catch (_) {const ta=document.createElement('textarea');ta.value=data;panel.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();}
-    });
-    const dl=document.createElement('button');dl.textContent='JSON 저장';dl.addEventListener('click',()=>{
-      const blob=new Blob([JSON.stringify(diagnosticReport(),null,2)],{type:'application/json;charset=utf-8'});
-      const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='zeta-profile-diagnostic.json';document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),5000);
-    });
-    const refresh=document.createElement('button');refresh.textContent='상태 새로고침';refresh.addEventListener('click',()=>{checkRoute();render();});
-    const profiles = document.createElement('button');
-    profiles.textContent = '프로필 JSON 보기';
-    profiles.addEventListener('click', () => {
-      const text = document.createElement('textarea');
-      text.value = JSON.stringify(report(), null, 2);
-      text.readOnly = true;
-      text.setAttribute('aria-label', '프로필 JSON');
-      text.style.cssText = 'width:100%;height:12em;font-size:16px';
-      panel.querySelector('textarea[aria-label="프로필 JSON"]')?.remove();
-      actions.before(text);
-      text.focus();
-      text.select();
-      text.setSelectionRange(0, text.value.length);
-    });
-    actions.append(profiles,copy,dl,refresh);
-    const note=document.createElement('small');note.textContent='채팅에서 캐릭터의 [프로필 사진]을 누르면 표시된 본문을 수집합니다. 진단에는 API 응답의 필드명·자료형·길이와 HTTP 메서드·상태만 기록합니다. 토큰과 인증 헤더는 기록하지 않습니다. 프로필 본문은 프로필 JSON 보기에서 확인하세요.';
-    const diagnostics = document.createElement('details');
-    const summary = document.createElement('summary');
-    summary.textContent = '진단';
-    diagnostics.append(summary, actions, note);
     expandAll = document.createElement('button');
     expandAll.type = 'button';
     expandAll.hidden = true;
@@ -642,11 +502,11 @@
       }
       updatePreviews();
     });
-    top.insertBefore(expandAll, close);
+    expandAll.className = 'zcp-expand-all';
     top.classList.add('zcp-titlebar');
     const scroll = document.createElement('div');
     scroll.className = 'zcp-scroll';
-    scroll.append(output, diagnostics);
+    scroll.append(expandAll, output);
     const grip = document.createElement('button');
     grip.type = 'button';
     grip.className = 'zcp-grip';
@@ -723,5 +583,4 @@
   window.addEventListener('popstate',checkRoute);
   window.addEventListener('hashchange',checkRoute);
   setInterval(checkRoute,1200);
-  log('실시간 API 감지 시작');
 })();
